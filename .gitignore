@@ -1,0 +1,23 @@
+# Build artifacts
+/procedural_engine/target/
+/procedural_engine/pkg/
+
+# Node
+node_modules/
+server/db/*.db
+
+# Environment
+.env
+.env.local
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+node_modules/
+target/

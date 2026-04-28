@@ -1,0 +1,427 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+    <meta name="description" content="Cartografía de lo Infinito — Explora un universo procedural determinístico e infinito. Descubre sistemas estelares, ruinas alienígenas y sectores anómalos.">
+    <meta name="theme-color" content="#050510">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+    <meta name="mobile-web-app-capable" content="yes">
+    <title>Cartografía de lo Infinito — Exploración Universal</title>
+    <link rel="stylesheet" href="./css/universe.css">
+    <link rel="manifest" href="/manifest.json">
+
+    <script async src="https://ga.jspm.io/npm:es-module-shims@1.10.0/dist/es-module-shims.js"></script>
+    <script type="importmap">
+    {
+        "imports": {
+            "three": "https://cdn.jsdelivr.net/npm/three@0.170.0/build/three.module.js",
+            "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.170.0/examples/jsm/"
+        }
+    }
+    </script>
+</head>
+<body>
+
+    <!-- ═══ Loading Screen ═══ -->
+    <div id="loading-screen">
+        <div class="loading-title">Cartografía de lo Infinito</div>
+        <div class="loading-bar-track">
+            <div class="loading-bar-fill"></div>
+        </div>
+        <div class="loading-status">Iniciando sistemas...</div>
+    </div>
+
+    <!-- ═══ 3D Canvas Container ═══ -->
+    <div id="canvas-container"></div>
+
+    <!-- ═══ Warp Overlay ═══ -->
+    <div id="warp-overlay"></div>
+
+    <!-- ═══ HUD Layer ═══ -->
+    <div id="hud">
+
+        <!-- Top Bar: Coordinates + Resources -->
+        <div id="top-bar">
+            <div class="glass-panel coord-display">
+                <div>
+                    <div class="coord-label">Sector</div>
+                    <div class="coord-value">
+                        <span id="display-x">—</span> ·
+                        <span id="display-y">—</span> ·
+                        <span id="display-z">—</span>
+                    </div>
+                    <div class="sector-hash" id="display-hash">—</div>
+                </div>
+            </div>
+
+            <div class="resources-display">
+                <div class="glass-panel resource-item" id="quarks-item">
+                    <span class="resource-icon">⚡</span>
+                    <div>
+                        <div class="resource-value" id="quark-count">500</div>
+                        <div class="resource-name">Quarks</div>
+                    </div>
+                </div>
+                <div class="glass-panel resource-item" id="fuel-item">
+                    <span class="resource-icon">🚀</span>
+                    <div>
+                        <div class="resource-value" id="fuel-count">20</div>
+                        <div class="resource-name">Combustible</div>
+                    </div>
+                </div>
+                <div class="glass-panel resource-item hull-indicator" id="hull-item">
+                    <span class="resource-icon">🛡️</span>
+                    <div>
+                        <div class="resource-value" id="hull-value">100%</div>
+                        <div class="hull-bar-mini"><div class="hull-bar-fill" id="hull-bar-fill" style="width:100%"></div></div>
+                    </div>
+                </div>
+                <div class="glass-panel resource-item" id="xp-item" style="min-width:100px;">
+                    <span class="resource-icon" id="xp-title-icon">🔰</span>
+                    <div style="flex:1;">
+                        <div class="resource-value" style="font-size:0.65rem;" id="xp-title-text">Cadete Lv.1</div>
+                        <div class="hull-bar-mini" style="margin-top:2px;"><div class="hull-bar-fill" id="xp-bar-fill" style="width:0%;background:linear-gradient(90deg,var(--color-primary),var(--rarity-epic));"></div></div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Left Panel: Sector Info -->
+        <div id="sector-panel" class="glass-panel">
+            <div class="panel-header"><span class="icon">📡</span> Datos del Sector</div>
+            <div id="sector-info-content">
+                <div style="color: var(--text-dim); font-size: 0.75rem; text-align: center; padding: 20px 0;">
+                    Escaneando sector inicial...
+                </div>
+            </div>
+            <!-- Claim button inside sector panel -->
+            <button class="btn-claim" id="claim-btn" style="display:none;">🏴 Reclamar Sector</button>
+        </div>
+
+        <!-- Event Banner (FOMO) -->
+        <div id="event-banner" class="glass-panel" style="display:none;position:fixed;top:80px;left:50%;transform:translateX(-50%);z-index:50;padding:6px 16px;border-radius:20px;font-size:0.65rem;font-family:var(--font-mono);text-align:center;white-space:nowrap;">
+            <span id="event-text"></span>
+            <span id="event-timer" style="color:var(--color-energy);margin-left:8px;"></span>
+        </div>
+
+        <!-- Right Panel: Discovery Log -->
+        <div id="discovery-panel" class="glass-panel">
+            <div class="panel-header"><span class="icon">📓</span> Registro de Exploración</div>
+            <div id="discovery-log"></div>
+        </div>
+
+        <!-- ═══ ACTION BAR (New!) ═══ -->
+        <div id="action-bar">
+            <button class="action-btn" id="action-scan" data-tooltip="Escanear">
+                <span class="action-icon">📡</span>
+                <span class="action-label">Escanear</span>
+            </button>
+            <button class="action-btn" id="action-random" data-tooltip="Salto Aleatorio">
+                <span class="action-icon">🎲</span>
+                <span class="action-label">Salto</span>
+            </button>
+            <button class="action-btn" id="action-ship" data-tooltip="Nave">
+                <span class="action-icon">🚀</span>
+                <span class="action-label">Nave</span>
+            </button>
+            <button class="action-btn" id="action-claim" data-tooltip="Reclamar Sector">
+                <span class="action-icon">🏴</span>
+                <span class="action-label">Reclamar</span>
+            </button>
+            <button class="action-btn" id="action-codex" data-tooltip="Códex">
+                <span class="action-icon">📖</span>
+                <span class="action-label">Códex</span>
+            </button>
+            <button class="action-btn" id="action-missions" data-tooltip="Misiones">
+                <span class="action-icon">🎯</span>
+                <span class="action-label">Misiones</span>
+                <span class="badge-dot" id="missions-badge" style="display:none;"></span>
+            </button>
+            <button class="action-btn" id="action-shop" data-tooltip="Tienda">
+                <span class="action-icon">🛒</span>
+                <span class="action-label">Tienda</span>
+            </button>
+            <button class="action-btn" id="action-achievements" data-tooltip="Logros">
+                <span class="action-icon">🏆</span>
+                <span class="action-label">Logros</span>
+            </button>
+            <button class="action-btn" id="action-craft" data-tooltip="Crafteo">
+                <span class="action-icon">🔨</span>
+                <span class="action-label">Craft</span>
+            </button>
+            <button class="action-btn" id="action-gacha" data-tooltip="Banner Estelar">
+                <span class="action-icon">🎰</span>
+                <span class="action-label">Gacha</span>
+            </button>
+            <button class="action-btn" id="action-expeditions" data-tooltip="Expediciones">
+                <span class="action-icon">🛰️</span>
+                <span class="action-label">Exped.</span>
+                <span class="badge-dot" id="expeditions-badge" style="display:none;"></span>
+            </button>
+            <button class="action-btn" id="action-ranking" data-tooltip="Ranking Global">
+                <span class="action-icon">🌟</span>
+                <span class="action-label">Ranking</span>
+            </button>
+            <button class="action-btn" id="action-prestige" data-tooltip="Ascender">
+                <span class="action-icon">✨</span>
+                <span class="action-label">Ascender</span>
+            </button>
+            <button class="action-btn" id="action-daily" data-tooltip="Recompensa Diaria">
+                <span class="action-icon">📅</span>
+                <span class="action-label">Diario</span>
+                <span class="badge-dot" id="daily-badge"></span>
+            </button>
+        </div>
+
+        <!-- Coordinate Input (collapsed, toggle from scan) -->
+        <div id="coord-bar" class="glass-panel" style="display:none;">
+            <div class="nav-input-group">
+                <label>X</label>
+                <input type="number" class="nav-input" id="coord-x" value="1500">
+            </div>
+            <div class="nav-input-group">
+                <label>Y</label>
+                <input type="number" class="nav-input" id="coord-y" value="-450">
+            </div>
+            <div class="nav-input-group">
+                <label>Z</label>
+                <input type="number" class="nav-input" id="coord-z" value="0">
+            </div>
+            <button class="btn-scan" id="scan-btn">⟐ IR</button>
+            <button class="btn-close-coord" id="close-coord-btn">✕</button>
+        </div>
+
+        <!-- Bottom Right: Stats -->
+        <div id="stats-counter">
+            <div class="stat-pill">🔭 <span class="stat-num" id="stat-sectors">0</span></div>
+            <div class="stat-pill">🪐 <span class="stat-num" id="stat-planets-total">0</span></div>
+            <div class="stat-pill">🏛 <span class="stat-num" id="stat-ruins-total">0</span></div>
+            <div class="stat-pill">⚠ <span class="stat-num" id="stat-anomalies">0</span></div>
+        </div>
+
+        <!-- Bottom Left: Quality + Volume -->
+        <div id="quality-toggle">
+            <button class="quality-btn" id="quality-btn">⚙ HIGH</button>
+            <button class="volume-btn" id="volume-btn">🔊</button>
+        </div>
+    </div>
+
+    <!-- ═══ MODAL: Codex ═══ -->
+    <div class="modal-overlay" id="modal-codex">
+        <div class="modal-container glass-panel">
+            <div class="modal-header">
+                <h2>📖 Códex de Exploración</h2>
+                <button class="modal-close" data-close="modal-codex">✕</button>
+            </div>
+            <div class="modal-body">
+                <div class="codex-tabs">
+                    <button class="codex-tab active" data-tab="stars">⭐ Estrellas</button>
+                    <button class="codex-tab" data-tab="biomes">🌍 Biomas</button>
+                    <button class="codex-tab" data-tab="ruins">🏛️ Ruinas</button>
+                    <button class="codex-tab" data-tab="bestiary">📊 Catálogo</button>
+                </div>
+                <div class="codex-content" id="codex-content">
+                    <!-- Filled dynamically -->
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- ═══ MODAL: Missions ═══ -->
+    <div class="modal-overlay" id="modal-missions">
+        <div class="modal-container glass-panel">
+            <div class="modal-header">
+                <h2>🎯 Misiones Activas</h2>
+                <button class="modal-close" data-close="modal-missions">✕</button>
+            </div>
+            <div class="modal-body" id="missions-content">
+                <!-- Filled dynamically -->
+            </div>
+        </div>
+    </div>
+
+    <!-- ═══ MODAL: Shop ═══ -->
+    <div class="modal-overlay" id="modal-shop">
+        <div class="modal-container glass-panel">
+            <div class="modal-header">
+                <h2>🛒 Tienda Galáctica</h2>
+                <button class="modal-close" data-close="modal-shop">✕</button>
+            </div>
+            <div class="modal-body">
+                <div class="shop-section">
+                    <h3>⛽ Combustible</h3>
+                    <div class="shop-grid">
+                        <div class="shop-card" data-buy="fuel-5">
+                            <div class="shop-item-name">Recarga Básica</div>
+                            <div class="shop-item-desc">+5 Combustible</div>
+                            <div class="shop-item-price">25 ⚡</div>
+                        </div>
+                        <div class="shop-card" data-buy="fuel-20">
+                            <div class="shop-item-name">Tanque Completo</div>
+                            <div class="shop-item-desc">+20 Combustible</div>
+                            <div class="shop-item-price">80 ⚡</div>
+                        </div>
+                        <div class="shop-card legendary" data-buy="fuel-100">
+                            <div class="shop-item-name">Reactor Infinito</div>
+                            <div class="shop-item-desc">+100 Combustible</div>
+                            <div class="shop-item-price">350 ⚡</div>
+                        </div>
+                    </div>
+                </div>
+                <div class="shop-section">
+                    <h3>⚡ Quarks</h3>
+                    <div class="shop-grid">
+                        <div class="shop-card" data-buy="quarks-starter">
+                            <div class="shop-item-name">Pack Iniciante</div>
+                            <div class="shop-item-desc">+100 Quarks</div>
+                            <div class="shop-item-price">GRATIS (diario)</div>
+                        </div>
+                        <div class="shop-card rare" data-buy="quarks-explorer">
+                            <div class="shop-item-name">Pack Explorador</div>
+                            <div class="shop-item-desc">+500 Quarks</div>
+                            <div class="shop-item-price">Escanear 10 sectores</div>
+                        </div>
+                        <div class="shop-card epic" data-buy="quarks-admiral">
+                            <div class="shop-item-name">Pack Almirante</div>
+                            <div class="shop-item-desc">+2000 Quarks</div>
+                            <div class="shop-item-price">Encontrar 1 Épico</div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- ═══ MODAL: Achievements ═══ -->
+    <div class="modal-overlay" id="modal-achievements">
+        <div class="modal-container glass-panel">
+            <div class="modal-header">
+                <h2>🏆 Logros</h2>
+                <button class="modal-close" data-close="modal-achievements">✕</button>
+            </div>
+            <div class="modal-body" id="achievements-content">
+                <!-- Filled dynamically -->
+            </div>
+        </div>
+    </div>
+
+    <!-- ═══ MODAL: Loot Reveal ═══ -->
+    <div class="modal-overlay" id="modal-loot" style="display:none;">
+        <div class="loot-reveal" id="loot-reveal-content"></div>
+    </div>
+
+    <!-- ═══ MODAL: Ship (Upgrades + Materials) ═══ -->
+    <div class="modal-overlay" id="modal-ship">
+        <div class="modal-container glass-panel">
+            <div class="modal-header">
+                <h2>🚀 Tu Nave</h2>
+                <button class="modal-close" data-close="modal-ship">✕</button>
+            </div>
+            <div class="modal-body" id="ship-content"></div>
+        </div>
+    </div>
+
+    <!-- ═══ MODAL: Encounter ═══ -->
+    <div class="modal-overlay" id="modal-encounter">
+        <div class="modal-container glass-panel">
+            <div class="modal-header">
+                <h2 id="encounter-title">⚠ Encuentro</h2>
+                <div></div>
+            </div>
+            <div class="modal-body" id="encounter-content"></div>
+        </div>
+    </div>
+
+    <!-- ═══ MODAL: Mining Result ═══ -->
+    <div class="modal-overlay" id="modal-mining" style="display:none;">
+        <div class="loot-reveal" id="mining-reveal-content"></div>
+    </div>
+
+    <!-- ═══ MODAL: Daily Rewards ═══ -->
+    <div class="modal-overlay" id="modal-daily">
+        <div class="modal-container glass-panel">
+            <div class="modal-header">
+                <h2>📅 Recompensas Diarias</h2>
+                <button class="modal-close" data-close="modal-daily">✕</button>
+            </div>
+            <div class="modal-body" id="daily-content"></div>
+        </div>
+    </div>
+
+    <!-- ═══ MODAL: Crafting ═══ -->
+    <div class="modal-overlay" id="modal-craft">
+        <div class="modal-container glass-panel">
+            <div class="modal-header">
+                <h2>🔨 Crafteo</h2>
+                <button class="modal-close" data-close="modal-craft">✕</button>
+            </div>
+            <div class="modal-body" id="craft-content"></div>
+        </div>
+    </div>
+
+    <!-- ═══ MODAL: Expeditions ═══ -->
+    <div class="modal-overlay" id="modal-expeditions">
+        <div class="modal-container glass-panel">
+            <div class="modal-header">
+                <h2>🛰️ Expediciones</h2>
+                <button class="modal-close" data-close="modal-expeditions">✕</button>
+            </div>
+            <div class="modal-body" id="expeditions-content"></div>
+        </div>
+    </div>
+
+    <!-- ═══ MODAL: Gacha ═══ -->
+    <div class="modal-overlay" id="modal-gacha">
+        <div class="modal-container glass-panel">
+            <div class="modal-header">
+                <h2>🎰 Banner Estelar</h2>
+                <button class="modal-close" data-close="modal-gacha">✕</button>
+            </div>
+            <div class="modal-body" id="gacha-content"></div>
+        </div>
+    </div>
+
+    <!-- ═══ MODAL: Gacha Animation ═══ -->
+    <div class="modal-overlay" id="modal-gacha-reveal" style="display:none;">
+        <div class="loot-reveal" id="gacha-reveal-content"></div>
+    </div>
+
+    <!-- ═══ MODAL: Ranking ═══ -->
+    <div class="modal-overlay" id="modal-ranking">
+        <div class="modal-container glass-panel">
+            <div class="modal-header">
+                <h2>🌟 Ranking Global</h2>
+                <button class="modal-close" data-close="modal-ranking">✕</button>
+            </div>
+            <div class="modal-body" id="ranking-content"></div>
+        </div>
+    </div>
+
+    <!-- ═══ MODAL: Prestige ═══ -->
+    <div class="modal-overlay" id="modal-prestige">
+        <div class="modal-container glass-panel">
+            <div class="modal-header">
+                <h2>✨ Ascensión</h2>
+                <button class="modal-close" data-close="modal-prestige">✕</button>
+            </div>
+            <div class="modal-body" id="prestige-content"></div>
+        </div>
+    </div>
+
+    <!-- ═══ MODAL: Offline Progress ═══ -->
+    <div class="modal-overlay" id="modal-offline" style="display:none;">
+        <div class="loot-reveal" id="offline-content"></div>
+    </div>
+
+    <!-- ═══ Notification Container ═══ -->
+    <div id="notification-container"></div>
+
+    <!-- ═══ Application Entry Point ═══ -->
+    <script type="module">
+        import { boot } from './js/app.js';
+        boot();
+    </script>
+</body>
+</html>
