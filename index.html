@@ -12,6 +12,11 @@
     <link rel="stylesheet" href="./css/universe.css">
     <link rel="manifest" href="/manifest.json">
 
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/gsap/3.12.5/gsap.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/tone/14.8.49/Tone.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/canvas-confetti@1.9.2/dist/confetti.browser.min.js"></script>
+    <script src="https://unpkg.com/@popperjs/core@2"></script>
+    <script src="https://unpkg.com/tippy.js@6"></script>
     <script async src="https://ga.jspm.io/npm:es-module-shims@1.10.0/dist/es-module-shims.js"></script>
     <script type="importmap">
     {
@@ -85,6 +90,11 @@
                         <div class="hull-bar-mini" style="margin-top:2px;"><div class="hull-bar-fill" id="xp-bar-fill" style="width:0%;background:linear-gradient(90deg,var(--color-primary),var(--rarity-epic));"></div></div>
                     </div>
                 </div>
+            </div>
+
+            <!-- Settings Button -->
+            <div class="glass-panel" id="btn-settings" style="display:flex; align-items:center; justify-content:center; padding:0 15px; cursor:pointer; font-size:1.2rem; transition:transform 0.2s; margin-left:10px;">
+                ⚙️
             </div>
         </div>
 
@@ -172,6 +182,14 @@
                 <span class="action-icon">📅</span>
                 <span class="action-label">Diario</span>
                 <span class="badge-dot" id="daily-badge"></span>
+            </button>
+            <button class="action-btn" id="action-market" data-tooltip="Mercado Galáctico">
+                <span class="action-icon">📊</span>
+                <span class="action-label">Mercado</span>
+            </button>
+            <button class="action-btn" id="action-beacon" data-tooltip="Dejar Baliza">
+                <span class="action-icon">📡</span>
+                <span class="action-label">Baliza</span>
             </button>
         </div>
 
@@ -413,6 +431,81 @@
     <!-- ═══ MODAL: Offline Progress ═══ -->
     <div class="modal-overlay" id="modal-offline" style="display:none;">
         <div class="loot-reveal" id="offline-content"></div>
+    </div>
+
+    <!-- ═══ MODAL: Galactic Market ═══ -->
+    <div class="modal-overlay" id="modal-market">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h2>📊 Mercado Galáctico</h2>
+                <button class="modal-close" data-close="modal-market">✕</button>
+            </div>
+            <div class="modal-body" id="market-content"></div>
+        </div>
+    </div>
+
+    <!-- ═══ MODAL: Beacon ═══ -->
+    <div class="modal-overlay" id="modal-beacon">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h2>📡 Baliza Holográfica</h2>
+                <button class="modal-close" data-close="modal-beacon">✕</button>
+            </div>
+            <div class="modal-body" id="beacon-content"></div>
+        </div>
+    </div>
+
+    <!-- ═══ MODAL: Settings ═══ -->
+    <div class="modal-overlay" id="modal-settings">
+        <div class="modal-container glass-panel">
+            <div class="modal-header">
+                <h2>⚙️ Configuración del Motor</h2>
+                <button class="modal-close" data-close="modal-settings">✕</button>
+            </div>
+            <div class="modal-body" id="settings-content">
+                <!-- Injected via settings.js -->
+            </div>
+        </div>
+    </div>
+
+    <!-- ═══ Crosshair (Planet Mode) ═══ -->
+    <div id="crosshair" style="display:none; position:fixed; top:50%; left:50%; width:10px; height:10px; transform:translate(-50%, -50%); border-radius:50%; border:2px solid rgba(0, 255, 204, 0.7); z-index:45; pointer-events:none;">
+        <div style="position:absolute; top:50%; left:50%; width:2px; height:2px; background:#fff; transform:translate(-50%, -50%); border-radius:50%;"></div>
+    </div>
+
+    <!-- ═══ Mining Popup ═══ -->
+    <div id="mining-popup" style="display:none; position:fixed; top:50%; left:50%; transform:translate(20px, -20px); color:#00ffcc; font-family:var(--font-mono); font-size:0.8rem; font-weight:bold; z-index:46; pointer-events:none; text-shadow: 0 0 5px rgba(0,255,204,0.5);">+15 Carbono</div>
+
+    <!-- ═══ Planet Surface HUD (Hidden by default) ═══ -->
+    <div id="planet-hud" style="display:none; position:fixed; bottom:20px; left:50%; transform:translateX(-50%); z-index:50; pointer-events:none;">
+        <div style="display:flex; gap:12px; align-items:center; background:rgba(0,0,0,0.6); backdrop-filter:blur(12px); border:1px solid rgba(0,255,204,0.15); border-radius:12px; padding:8px 18px; font-family:var(--font-mono); font-size:0.7rem; color:var(--text-primary);">
+            <div style="display:flex; flex-direction:column; align-items:center; gap:2px;">
+                <span style="color:var(--text-dim); font-size:0.55rem; text-transform:uppercase; letter-spacing:1px;">Altitud</span>
+                <span id="planet-altitude" style="color:#00ffcc; font-size:0.85rem; font-weight:bold;">0m</span>
+            </div>
+            <div style="width:1px; height:24px; background:rgba(255,255,255,0.1);"></div>
+            <div style="display:flex; flex-direction:column; align-items:center; gap:2px;">
+                <span style="color:var(--text-dim); font-size:0.55rem; text-transform:uppercase; letter-spacing:1px;">Bioma</span>
+                <span id="planet-biome-label" style="color:#ffaa00; font-size:0.75rem;">—</span>
+            </div>
+            <div style="width:1px; height:24px; background:rgba(255,255,255,0.1);"></div>
+            <div style="display:flex; flex-direction:column; align-items:center; gap:2px;">
+                <span style="color:var(--text-dim); font-size:0.55rem; text-transform:uppercase; letter-spacing:1px;">Escape</span>
+                <span style="color:var(--text-secondary); font-size:0.65rem;">↑ 800m</span>
+            </div>
+        </div>
+    </div>
+
+    <!-- ═══ Touch Controls (Hidden on Desktop) ═══ -->
+    <div id="touch-controls" style="display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%; z-index: 10; pointer-events: none;">
+    <!-- Mobile Action Button -->
+    <div id="touch-action-btn" style="position: absolute; bottom: 40px; right: 40px; width: 60px; height: 60px; border-radius: 50%; background: rgba(0, 255, 204, 0.3); border: 2px solid rgba(0, 255, 204, 0.6); display: flex; align-items: center; justify-content: center; pointer-events: auto; user-select: none;">
+        <span style="color: #fff; font-weight: bold; pointer-events: none;">⛏️</span>
+    </div>
+        <!-- Visual Joystick feedback -->
+        <div id="touch-stick" style="position: absolute; width: 100px; height: 100px; border-radius: 50%; border: 2px solid rgba(255,255,255,0.2); background: rgba(0,0,0,0.2); transform: translate(-50%, -50%); opacity: 0; transition: opacity 0.2s; pointer-events: none;">
+            <div class="touch-knob" style="position: absolute; top: 50%; left: 50%; width: 40px; height: 40px; margin: -20px; border-radius: 50%; background: rgba(255,255,255,0.5); box-shadow: 0 0 10px rgba(0,255,204,0.5);"></div>
+        </div>
     </div>
 
     <!-- ═══ Notification Container ═══ -->
