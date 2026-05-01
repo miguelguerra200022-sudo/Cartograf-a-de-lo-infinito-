@@ -356,3 +356,35 @@ export function triggerDiscoveryBurst(scene, rarity = 'common') {
 export function isWarping() {
     return warpActive;
 }
+
+/**
+ * Triggers a screen shake effect using GSAP.
+ * @param {number} intensity - The severity of the shake
+ * @param {number} duration - The duration in seconds
+ */
+export function triggerShake(intensity = 1, duration = 0.3) {
+    if (typeof gsap === 'undefined') return;
+    const container = document.body;
+    const move = intensity * 4;
+    gsap.fromTo(container, 
+        { x: -move, y: move }, 
+        { x: 0, y: 0, duration: duration, ease: `rough({ strength: ${intensity * 2}, points: 10, randomize: true })`, clearProps: "transform" }
+    );
+}
+
+/**
+ * Triggers a confetti explosion based on rarity.
+ * @param {string} rarity 
+ */
+export function triggerConfetti(rarity = 'epic') {
+    if (typeof confetti === 'undefined') return;
+    let particleCount = 50, spread = 70, colors = ['#ffffff'];
+    switch(rarity) {
+        case 'legendary': particleCount = 150; spread = 120; colors = ['#f39c12', '#f1c40f', '#e67e22', '#ffffff']; break;
+        case 'epic': particleCount = 100; spread = 90; colors = ['#9b59b6', '#8e44ad', '#ecf0f1']; break;
+        case 'mythic': particleCount = 300; spread = 160; colors = ['#e74c3c', '#c0392b', '#1abc9c', '#f1c40f']; break;
+        case 'rare': particleCount = 60; spread = 60; colors = ['#3498db', '#2980b9']; break;
+        default: return;
+    }
+    confetti({ particleCount, spread, origin: { y: 0.6 }, colors, zIndex: 9999, disableForReducedMotion: true });
+}
