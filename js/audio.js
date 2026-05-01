@@ -1,179 +1,94 @@
-// Procedural ambient audio engine using Web Audio API.
-// Generates atmospheric space drones and discovery sound effects
-// entirely from oscillators — no audio files needed.
+// audio.js - Refactored using Tone.js for high-quality procedural audio
 
-let audioCtx = null;
-let masterGain = null;
-let droneNodes = [];
 let isPlaying = false;
 let isMuted = false;
+let ambientSynth = null;
+let discoverySynth = null;
+let scanSynth = null;
+let ambientFilter = null;
+let masterReverb = null;
 
-/**
- * Initialize the Web Audio API context.
- * Must be called from a user gesture (click).
- */
-export function initAudio() {
-    if (audioCtx) return;
-    audioCtx = new (window.AudioContext || window.webkitAudioContext)();
-    masterGain = audioCtx.createGain();
-    masterGain.gain.value = 0.15;
-    masterGain.connect(audioCtx.destination);
+export async function initAudio() {
+    if (typeof Tone === 'undefined') return;
+    await Tone.start();
+    
+    // Set up master effects chain
+    masterReverb = new Tone.Reverb({ decay: 4, wet: 0.5 }).toDestination();
+    Tone.Destination.volume.value = -12; // Master volume
+
+    // Ambient Drone Synth
+    ambientFilter = new Tone.Filter(400, "lowpass").connect(masterReverb);
+    ambientSynth = new Tone.PolySynth(Tone.Synth, {
+        oscillator: { type: "fmsine", modulationType: "sine", modulationIndex: 3, harmonicity: 0.5 },
+        envelope: { attack: 4, decay: 1, sustain: 1, release: 5 }
+    }).connect(ambientFilter);
+
+    // Discovery Chime Synth
+    discoverySynth = new Tone.PolySynth(Tone.FMSynth, {
+        envelope: { attack: 0.01, decay: 0.5, sustain: 0, release: 1 },
+        modulation: { type: "square" },
+        modulationEnvelope: { attack: 0.05, decay: 0.1, sustain: 0, release: 0.5 }
+    }).connect(masterReverb);
+
+    // Scan/Mining Sound
+    scanSynth = new Tone.NoiseSynth({
+        noise: { type: "pink" },
+        envelope: { attack: 0.05, decay: 0.2, sustain: 0, release: 0.2 }
+    }).connect(masterReverb);
 }
 
-/**
- * Start the ambient space drone.
- * Layers multiple detuned oscillators with slow LFO modulation.
- */
 export function playAmbient() {
-    if (!audioCtx || isPlaying) return;
+    if (typeof Tone === 'undefined' || isPlaying || isMuted) return;
     isPlaying = true;
-
-    // Base drone layer — deep sine
-    const drone1 = createDroneLayer(55, 'sine', 0.08);
-    // Harmonic layer — soft triangle
-    const drone2 = createDroneLayer(82.5, 'triangle', 0.04);
-    // High shimmer — barely audible
-    const drone3 = createDroneLayer(220, 'sine', 0.015);
-    // Sub-bass rumble
-    const drone4 = createDroneLayer(36, 'sine', 0.05);
-
-    droneNodes.push(drone1, drone2, drone3, drone4);
+    
+    // Deep space chord
+    ambientSynth.triggerAttack(["C2", "G2", "C3", "D#3"]);
+    
+    // Slowly modulate the filter for organic feel
+    const lfo = new Tone.LFO("0.1hz", 200, 800).connect(ambientFilter.frequency).start();
 }
 
-function createDroneLayer(freq, type, volume) {
-    const osc = audioCtx.createOscillator();
-    const gain = audioCtx.createGain();
-    const filter = audioCtx.createBiquadFilter();
-
-    osc.type = type;
-    osc.frequency.value = freq;
-
-    // Slow detuning for organic feel
-    const lfo = audioCtx.createOscillator();
-    const lfoGain = audioCtx.createGain();
-    lfo.type = 'sine';
-    lfo.frequency.value = 0.05 + Math.random() * 0.1;
-    lfoGain.gain.value = freq * 0.02;
-    lfo.connect(lfoGain);
-    lfoGain.connect(osc.frequency);
-    lfo.start();
-
-    filter.type = 'lowpass';
-    filter.frequency.value = 400;
-    filter.Q.value = 1;
-
-    gain.gain.value = 0;
-    gain.gain.linearRampToValueAtTime(volume, audioCtx.currentTime + 3);
-
-    osc.connect(filter);
-    filter.connect(gain);
-    gain.connect(masterGain);
-    osc.start();
-
-    return { osc, gain, lfo, lfoGain, filter };
-}
-
-/**
- * Stop ambient drone with fade-out.
- */
 export function stopAmbient() {
-    if (!audioCtx || !isPlaying) return;
+    if (typeof Tone === 'undefined' || !isPlaying) return;
     isPlaying = false;
-
-    const fadeTime = audioCtx.currentTime + 1;
-    droneNodes.forEach(node => {
-        node.gain.gain.linearRampToValueAtTime(0, fadeTime);
-        setTimeout(() => {
-            try { node.osc.stop(); node.lfo.stop(); } catch (e) { /* already stopped */ }
-        }, 1200);
-    });
-    droneNodes = [];
+    if (ambientSynth) ambientSynth.triggerRelease(["C2", "G2", "C3", "D#3"]);
 }
 
-/**
- * Play a scanning/warp sound effect.
- * Rising pitch sweep with noise burst.
- */
 export function playScanSound() {
-    if (!audioCtx) return;
-
-    const osc = audioCtx.createOscillator();
-    const gain = audioCtx.createGain();
-    const filter = audioCtx.createBiquadFilter();
-
-    osc.type = 'sawtooth';
-    osc.frequency.value = 100;
-    osc.frequency.exponentialRampToValueAtTime(2000, audioCtx.currentTime + 0.8);
-
-    filter.type = 'bandpass';
-    filter.frequency.value = 800;
-    filter.Q.value = 5;
-
-    gain.gain.value = 0.08;
-    gain.gain.linearRampToValueAtTime(0, audioCtx.currentTime + 1.0);
-
-    osc.connect(filter);
-    filter.connect(gain);
-    gain.connect(masterGain);
-
-    osc.start();
-    osc.stop(audioCtx.currentTime + 1.0);
+    if (typeof Tone === 'undefined' || isMuted) return;
+    if (scanSynth) scanSynth.triggerAttackRelease("16n");
 }
 
-/**
- * Play a discovery chime — shimmering bell-like tone.
- * @param {string} rarity - 'common'|'uncommon'|'rare'|'epic'|'legendary'
- */
 export function playDiscoverySound(rarity = 'common') {
-    if (!audioCtx) return;
-
+    if (typeof Tone === 'undefined' || isMuted) return;
+    
     const baseFreqs = {
-        common: [523, 659],
-        uncommon: [523, 659, 784],
-        rare: [440, 554, 659, 880],
-        epic: [392, 494, 587, 784, 988],
-        legendary: [261, 330, 392, 523, 659, 784, 1047],
+        common: ["C5", "E5"],
+        uncommon: ["C5", "E5", "G5"],
+        rare: ["A4", "C#5", "E5", "A5"],
+        epic: ["G4", "B4", "D5", "G5", "B5"],
+        legendary: ["C4", "E4", "G4", "C5", "E5", "G5", "C6"],
+        mythic: ["E4", "G#4", "B4", "E5", "G#5", "B5", "E6"]
     };
 
-    const freqs = baseFreqs[rarity] || baseFreqs.common;
-    const duration = rarity === 'legendary' ? 2.5 : rarity === 'epic' ? 1.8 : 1.2;
+    const notes = baseFreqs[rarity] || baseFreqs.common;
+    const duration = rarity === 'legendary' || rarity === 'mythic' ? "2n" : "4n";
 
-    freqs.forEach((freq, i) => {
-        const osc = audioCtx.createOscillator();
-        const gain = audioCtx.createGain();
-
-        osc.type = 'sine';
-        osc.frequency.value = freq;
-
-        const startTime = audioCtx.currentTime + i * 0.08;
-        gain.gain.setValueAtTime(0, startTime);
-        gain.gain.linearRampToValueAtTime(0.06, startTime + 0.05);
-        gain.gain.exponentialRampToValueAtTime(0.001, startTime + duration);
-
-        osc.connect(gain);
-        gain.connect(masterGain);
-
-        osc.start(startTime);
-        osc.stop(startTime + duration);
+    // Play chord with slight arpeggiation
+    const now = Tone.now();
+    notes.forEach((note, index) => {
+        discoverySynth.triggerAttackRelease(note, duration, now + (index * 0.05));
     });
 }
 
-/**
- * Toggle mute state.
- */
 export function toggleMute() {
-    if (!audioCtx) return false;
     isMuted = !isMuted;
-    masterGain.gain.linearRampToValueAtTime(
-        isMuted ? 0 : 0.15,
-        audioCtx.currentTime + 0.3
-    );
+    if (typeof Tone !== 'undefined') {
+        Tone.Destination.mute = isMuted;
+    }
     return isMuted;
 }
 
-/**
- * Get current mute state.
- */
 export function getMuteState() {
     return isMuted;
 }
