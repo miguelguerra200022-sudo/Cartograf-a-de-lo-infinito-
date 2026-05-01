@@ -3,15 +3,18 @@
 // and procedural space dust clouds.
 
 import * as THREE from 'three';
-import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+import { initControls, setPosition } from './controls.js';
 import { EffectComposer } from 'three/addons/postprocessing/EffectComposer.js';
 import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
 import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';
 import { ShaderPass } from 'three/addons/postprocessing/ShaderPass.js';
+import { SSAOPass } from 'three/addons/postprocessing/SSAOPass.js';
+import { generateOutpost } from './outpost.js';
 
 let renderer, scene, camera, controls, composer;
 let starField = null;
 let dustClouds = [];
+let ghostShips = [];
 let qualityLevel = 'high';
 
 const QUALITY = {
@@ -129,7 +132,36 @@ const vignetteShader = {
 };
 
 let vignettePass = null;
+let ssaoPass = null;
+let chromaticPass = null;
 let shaderTime = 0;
+
+// Chromatic Aberration shader — subtle RGB split for atmospheric distortion
+const chromaticAberrationShader = {
+    uniforms: {
+        tDiffuse: { value: null },
+        amount: { value: 0.002 },
+    },
+    vertexShader: `
+        varying vec2 vUv;
+        void main() {
+            vUv = uv;
+            gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+        }
+    `,
+    fragmentShader: `
+        uniform sampler2D tDiffuse;
+        uniform float amount;
+        varying vec2 vUv;
+        void main() {
+            vec2 offset = amount * (vUv - 0.5);
+            float r = texture2D(tDiffuse, vUv + offset).r;
+            float g = texture2D(tDiffuse, vUv).g;
+            float b = texture2D(tDiffuse, vUv - offset).b;
+            gl_FragColor = vec4(r, g, b, 1.0);
+        }
+    `,
+};
 
 /**
  * Initialize the Three.js scene with cinematic rendering pipeline.
@@ -167,17 +199,9 @@ export function initScene(container, quality = 'auto') {
     camera = new THREE.PerspectiveCamera(55, window.innerWidth / window.innerHeight, 0.1, 12000);
     camera.position.set(0, 80, 200);
 
-    // Controls
-    controls = new OrbitControls(camera, renderer.domElement);
-    controls.enableDamping = true;
-    controls.dampingFactor = 0.06;
-    controls.rotateSpeed = 0.4;
-    controls.zoomSpeed = 0.7;
-    controls.minDistance = 15;
-    controls.maxDistance = 800;
-    controls.target.set(0, 0, 0);
-    controls.autoRotate = true;
-    controls.autoRotateSpeed = 0.15;
+    // Free Flight Controls (replaces OrbitControls)
+    initControls(camera);
+    setPosition(0, 80, 200);
 
     // Lights
     const ambient = new THREE.AmbientLight(0x0a0a22, 0.5);
@@ -201,9 +225,9 @@ export function initScene(container, quality = 'auto') {
     if (q.bloom) {
         const bloomPass = new UnrealBloomPass(
             new THREE.Vector2(window.innerWidth, window.innerHeight),
-            q.bloomStrength,
-            0.4,
-            0.75
+            q.bloomStrength * 1.5, // slightly boost strength
+            0.6, // radius
+            0.9  // high threshold to avoid blurring planets
         );
         composer.addPass(bloomPass);
     }
@@ -211,6 +235,24 @@ export function initScene(container, quality = 'auto') {
     // Vignette + film grain pass
     vignettePass = new ShaderPass(vignetteShader);
     composer.addPass(vignettePass);
+
+    // SSAO Pass (disabled by default, enabled on planet surface)
+    try {
+        ssaoPass = new SSAOPass(scene, camera, window.innerWidth, window.innerHeight);
+        ssaoPass.kernelRadius = 8;
+        ssaoPass.minDistance = 0.005;
+        ssaoPass.maxDistance = 0.1;
+        ssaoPass.output = SSAOPass.OUTPUT.Default;
+        ssaoPass.enabled = false; // Disabled in space mode
+        composer.addPass(ssaoPass);
+    } catch (e) {
+        console.warn('[SCENE] SSAO not available:', e.message);
+    }
+
+    // Chromatic Aberration Pass (subtle, for planet atmosphere)
+    chromaticPass = new ShaderPass(chromaticAberrationShader);
+    chromaticPass.enabled = false; // Disabled in space mode
+    composer.addPass(chromaticPass);
 
     window.addEventListener('resize', onResize);
 
@@ -374,7 +416,7 @@ let fpsHistory = [];
 let lastAutoDowngrade = 0;
 
 export function renderFrame(delta) {
-    controls.update();
+
     shaderTime += delta;
 
     // Update star twinkling
@@ -388,10 +430,31 @@ export function renderFrame(delta) {
         starField.rotation.x += delta * 0.0005;
     }
 
-    // Dust cloud gentle drift
-    dustClouds.forEach((d, i) => {
-        d.rotation.y += delta * 0.003 * (i % 2 === 0 ? 1 : -1);
+    // Rotate dust clouds slowly
+    dustClouds.forEach(dust => {
+        dust.rotation.y += 0.0002 * delta;
+        dust.rotation.z += 0.0001 * delta;
     });
+
+    // Animate ghost ships (MMO feel)
+    for (let i = ghostShips.length - 1; i >= 0; i--) {
+        const ship = ghostShips[i];
+        ship.position.addScaledVector(ship.userData.velocity, delta * 0.1);
+        ship.userData.life -= delta;
+        if (ship.userData.life <= 0) {
+            scene.remove(ship);
+            ship.geometry.dispose();
+            ship.material.dispose();
+            ghostShips.splice(i, 1);
+        } else {
+            // Fade out
+            ship.material.opacity = Math.min(1.0, ship.userData.life * 0.5);
+        }
+    }
+
+    if (Math.random() < 0.005) { // 0.5% chance per frame to spawn a ghost ship
+        spawnGhostShip();
+    }
 
     // Vignette time
     if (vignettePass) {
@@ -426,7 +489,6 @@ export function renderFrame(delta) {
 export function getScene() { return scene; }
 export function getCamera() { return camera; }
 export function getRenderer() { return renderer; }
-export function getControls() { return controls; }
 
 export function setQuality(level) {
     qualityLevel = level;
@@ -456,15 +518,68 @@ export function setQuality(level) {
 }
 
 /**
+ * Spawn a "Ghost Ship" passing by to simulate other players (MMO feel)
+ */
+function spawnGhostShip() {
+    if (!scene || ghostShips.length > 5) return;
+    
+    const start = new THREE.Vector3(
+        (Math.random() - 0.5) * 600,
+        (Math.random() - 0.5) * 100 + 50,
+        (Math.random() - 0.5) * 600
+    );
+    
+    const target = new THREE.Vector3(
+        (Math.random() - 0.5) * 600,
+        (Math.random() - 0.5) * 100,
+        (Math.random() - 0.5) * 600
+    );
+    
+    const direction = new THREE.Vector3().subVectors(target, start).normalize();
+    const speed = 200 + Math.random() * 400; // warp speed
+    
+    // Create a stretched glowing trail
+    const length = 40;
+    const geo = new THREE.CylinderGeometry(0.2, 0.2, length, 8);
+    geo.rotateX(Math.PI / 2); // align along Z
+    
+    const colors = [0x00ffff, 0xff00ff, 0xffaa00, 0x00ffaa];
+    const mat = new THREE.MeshBasicMaterial({ 
+        color: colors[Math.floor(Math.random() * colors.length)], 
+        transparent: true, 
+        opacity: 0,
+        blending: THREE.AdditiveBlending,
+        depthWrite: false
+    });
+    
+    const mesh = new THREE.Mesh(geo, mat);
+    mesh.position.copy(start);
+    // Point the cylinder in the direction of travel
+    mesh.quaternion.setFromUnitVectors(new THREE.Vector3(0, 0, 1), direction);
+    
+    mesh.userData = {
+        velocity: direction.multiplyScalar(speed),
+        life: 4.0 + Math.random() * 2.0 // lives for 4-6 seconds
+    };
+    
+    scene.add(mesh);
+    ghostShips.push(mesh);
+}
+
+/**
  * Smoothly move camera with easing.
  */
-export function animateCamera(position, lookAt, duration = 1500) {
+export function animateCamera(position, lookAtTarget, duration = 1500) {
     const startPos = camera.position.clone();
-    const startTarget = controls.target.clone();
+    const startQuat = camera.quaternion.clone();
+    
+    // Calculate final quaternion looking at the target
+    const dummyCamera = camera.clone();
+    dummyCamera.position.copy(position);
+    dummyCamera.lookAt(lookAtTarget);
+    const endQuat = dummyCamera.quaternion.clone();
+    
     const startTime = performance.now();
-
-    // Temporarily disable auto-rotate during animation
-    controls.autoRotate = false;
 
     function update() {
         const elapsed = performance.now() - startTime;
@@ -472,14 +587,16 @@ export function animateCamera(position, lookAt, duration = 1500) {
         const ease = t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2;
 
         camera.position.lerpVectors(startPos, position, ease);
-        controls.target.lerpVectors(startTarget, lookAt, ease);
+        camera.quaternion.slerpQuaternions(startQuat, endQuat, ease);
 
         if (t < 1) {
             requestAnimationFrame(update);
         } else {
-            // Re-enable auto rotate after animation
-            controls.autoRotate = true;
-            controls.autoRotateSpeed = 0.15;
+            // Sync the flight controller's internal rotation target
+            import('./controls.js').then(module => {
+                module.setPosition(position.x, position.y, position.z);
+                module.lookAt(lookAtTarget);
+            });
         }
     }
     update();
@@ -506,4 +623,25 @@ export function clearDynamicObjects() {
             }
         }
     });
+}
+
+/**
+ * Adds an outpost to the current scene.
+ */
+export function addOutpost(seed, complexity) {
+    if (!scene) return;
+    const outpost = generateOutpost(seed, complexity);
+    scene.add(outpost);
+    return outpost;
+}
+
+/**
+ * Enable or disable planet-specific post-processing effects.
+ * Call with `true` when entering a planet, `false` when leaving.
+ * @param {boolean} enabled
+ */
+export function setPlanetPostProcessing(enabled) {
+    if (ssaoPass) ssaoPass.enabled = enabled;
+    if (chromaticPass) chromaticPass.enabled = enabled;
+    console.log(`[SCENE] Planet post-processing: ${enabled ? 'ON' : 'OFF'}`);
 }

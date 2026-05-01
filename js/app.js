@@ -1,19 +1,28 @@
 // Main application orchestrator — ties ALL systems together.
 // WASM + Three.js + UI + Audio + Ship + Encounters + Gameplay
 
-import { initScene, renderFrame, getScene, getCamera, clearDynamicObjects, animateCamera, setQuality } from './scene.js';
+import { initScene, renderFrame, getScene, getCamera, getRenderer, clearDynamicObjects, animateCamera, setQuality, addOutpost, setPlanetPostProcessing } from './scene.js';
 import { createTerrain } from './terrain.js';
 import { createPlanetSystem, animatePlanets } from './planets.js';
 import { createRuins, animateRuins } from './ruins.js';
-import { createNebula, animateNebula, triggerWarp, triggerDiscoveryBurst, isWarping } from './effects.js';
-import { initUI, showHUD, updateCoordinates, updateSectorInfo, updateResources, showNotification } from './ui.js';
-import { initAudio, playAmbient, playScanSound, playDiscoverySound, toggleMute } from './audio.js';
+import { createNebula, animateNebula, triggerWarp, triggerDiscoveryBurst, isWarping, triggerShake, triggerConfetti } from './effects.js';
+import { initUI, showHUD, updateCoordinates, updateSectorInfo, updateResources, showNotification, updateEventHUD } from './ui.js';
+import { initAudio, playAmbient, playScanSound, playDiscoverySound, toggleMute, stopAmbient, getMuteState } from './audio.js';
 import { initGameplay, recordScan, claimSector, isSectorClaimed, shopPurchase, openModal, showLootReveal } from './gameplay.js';
 import { initShip, getShipStats, getMaterials, minePlanet, upgradeModule, repairHull, takeDamage, checkFuelSave, MATERIALS, BIOME_YIELDS } from './ship.js';
 import { initEncounters, rollEncounter, resolveChoice, getDailyStatus, claimDailyReward } from './encounters.js';
 import { initCrafting, RECIPES, EXPEDITION_TEMPLATES, canCraft, craft, startExpedition, collectExpeditions, getActiveExpeditions, isFeatureUnlocked } from './crafting.js';
 import { initAddiction, gachaPull, gachaMultiPull, getGachaState, GACHA_COST, GACHA_MULTI_COST, doPrestige, calculatePrestigeReward, buyPrestigePerk, getPrestigeState, hasPrestigePerk, calculateOfflineProgress, touchOnlineTime, getLeaderboard, getCurrentEvent, getEventTimeRemaining, PRESTIGE_PERKS } from './addiction.js';
 import { initCollection, recordDiscovery, recordMining, recordCraft, recordExpedition, recordGachaPulls, getCollectionStats, getBestiary, getExplorerTitle } from './collection.js';
+import { initMarket, tickMarket, getMarketData, sellMaterial, buyMaterial, getPrice, getTrendIndicator, recordMining as recordMarketMining } from './market.js';
+import { initBeacons, leaveBeacon, getBeacon, rateBeacon, getPresetMessages, createBeaconMesh, animateBeacon } from './beacons.js';
+import { initOutpostLogistics, registerOutpost, tickOutposts, collectOutpostProduction, getOutpostRegistry, getActiveOutpostCount } from './outpost.js';
+import { initInput, InputState } from './input.js';
+import { initSettings } from './settings.js';
+import { updateControls } from './controls.js';
+import { initPlanetSurface, enterPlanet, leavePlanet, updatePlanetSurface, getGameMode, getAltitude, getCurrentPlanetData } from './planet_surface.js';
+import { initMining, updateMining, cleanupMining, fireMiningLaser } from './mining.js';
+import { initFPSController, updateFPSController, enableFPS, disableFPS, isFPSActive } from './fps_controller.js';
 
 import * as THREE from 'three';
 import { store } from './store.js';
@@ -53,6 +62,14 @@ export async function boot() {
     initCrafting();
     initAddiction();
     initCollection();
+    initMarket();
+    initBeacons();
+    initOutpostLogistics();
+    initInput();
+    initSettings();
+    initPlanetSurface(getScene(), getCamera(), getRenderer());
+    initMining(getScene(), getCamera());
+    initFPSController(getCamera());
     
     // Load persistent stats
     try {
@@ -98,8 +115,11 @@ export async function boot() {
         }
 
         // Start event banner timer
-        updateEventBanner();
-        setInterval(updateEventBanner, 60000);
+        setInterval(() => {
+            const eventInfo = getEventTimeRemaining();
+            updateEventHUD(eventInfo);
+        }, 1000);
+        updateEventHUD(getEventTimeRemaining());
         
         // Show current explorer level
         updateXPDisplay();
@@ -115,11 +135,52 @@ export async function boot() {
         lastTime = now;
         totalTime += delta;
 
-        if (!isWarping()) {
+        const currentMode = getGameMode();
+
+        // Planet surface mode — update chunks and terrain
+        if (currentMode !== 'SPACE') {
+            if (InputState.fire) {
+                fireMiningLaser();
+            }
+            updatePlanetSurface(delta);
+            updateMining(delta);
+            
+            // Update planet HUD
+            const altEl = document.getElementById('planet-altitude');
+            if (altEl) {
+                const alt = getAltitude(getCamera());
+                altEl.textContent = `${Math.round(alt)}m`;
+            }
+        }
+
+        if (!isWarping() && currentMode === 'SPACE') {
             animatePlanets(delta);
             animateRuins(delta, totalTime);
             animateNebula(delta);
+
+            // Animate beacons in the scene
+            const scene = getScene();
+            if (scene) {
+                scene.traverse((child) => {
+                    if (child.userData && child.userData.isBeacon) {
+                        animateBeacon(child, delta);
+                    }
+                    // Rotate outposts slowly
+                    if (child.userData && child.userData.isOutpost) {
+                        child.rotation.y += delta * 0.1;
+                    }
+                });
+            }
         }
+        
+        // Update controls based on current mode
+        const isFPS = isFPSActive();
+        if (currentMode !== 'SPACE' && isFPS) {
+            updateFPSController(delta);
+        } else {
+            updateControls(delta);
+        }
+        
         renderFrame(delta);
     }
     animate();
@@ -177,7 +238,7 @@ async function generateSector(x, y, z, useWarp = true) {
         createRuins(scene, data.ruins);
         createNebula(scene);
 
-        const rarity = updateSectorInfo(data);
+        const rarity = updateSectorInfo(data, { x, y, z });
 
         animateCamera(
             new THREE.Vector3(0, 80, 200),
@@ -192,6 +253,10 @@ async function generateSector(x, y, z, useWarp = true) {
             if (isSectorClaimed(x, y, z)) {
                 claimBtn.textContent = '✅ Sector Reclamado';
                 claimBtn.className = 'btn-claim claimed';
+                
+                // Render Outpost!
+                const seed = Math.abs((x * 73856093) ^ (y * 19349663) ^ (z * 83492791));
+                addOutpost(seed, 15);
             } else {
                 claimBtn.textContent = '🏴 Reclamar Sector (100⚡)';
                 claimBtn.className = 'btn-claim';
@@ -211,6 +276,17 @@ async function generateSector(x, y, z, useWarp = true) {
         
         // Record for bestiary + XP
         recordDiscovery(data);
+
+        // Tick the Galactic Market on each scan
+        tickMarket();
+
+        // Check for a beacon at this sector
+        const existingBeacon = getBeacon(x, y, z);
+        if (existingBeacon) {
+            showNotification('📡 Baliza Detectada', `"${existingBeacon.message}" — ${existingBeacon.author}`, 'uncommon');
+            const beaconMesh = createBeaconMesh(existingBeacon);
+            scene.add(beaconMesh);
+        }
 
         // Discovery feedback
         if (rarity !== 'common') {
@@ -464,6 +540,11 @@ function doMine(planetIndex) {
 
     store.getState().miningCooldowns[planetIndex] = now;
 
+    // --- GAME FEEL: Sensory Juice ---
+    triggerShake(1.5, 0.4);
+    playScanSound();
+    // --------------------------------
+
     // Show mining result
     const modal = document.getElementById('modal-mining');
     const content = document.getElementById('mining-reveal-content');
@@ -646,6 +727,21 @@ function bindEvents() {
                 claimBtn.textContent = '✅ Sector Reclamado';
                 claimBtn.className = 'btn-claim claimed';
             }
+            
+            // Render Outpost immediately upon claiming
+            const seed = Math.abs((x * 73856093) ^ (y * 19349663) ^ (z * 83492791));
+            addOutpost(seed, 15);
+
+            // Register in logistics system
+            const state = store.getState();
+            const dominantBiome = state.currentSector?.star_system?.planets?.[0]?.biome || 'Temperate';
+            registerOutpost(x, y, z, dominantBiome);
+
+            // Tick outposts and show alerts
+            const { alerts } = tickOutposts();
+            alerts.forEach(a => showNotification('⚠️ Alerta Logística', a, ''));
+
+            showNotification('🏗️ Estación Construida', `Tu estación minera ya está operando en este sector. Produce y consume recursos.`, 'legendary');
         }
     }
     document.getElementById('action-claim')?.addEventListener('click', doClaim);
@@ -693,6 +789,18 @@ function bindEvents() {
         document.getElementById('modal-prestige').classList.add('active');
     });
 
+    // Galactic Market
+    document.getElementById('action-market')?.addEventListener('click', () => {
+        renderMarketModal();
+        document.getElementById('modal-market').classList.add('active');
+    });
+
+    // Beacon
+    document.getElementById('action-beacon')?.addEventListener('click', () => {
+        renderBeaconModal();
+        document.getElementById('modal-beacon').classList.add('active');
+    });
+
     // Shop purchase event
     document.addEventListener('shop-purchase', (e) => {
         const result = shopPurchase(e.detail.itemId, store.getState().quarks, store.getState().fuel);
@@ -706,7 +814,45 @@ function bindEvents() {
         const planetCard = e.target.closest('.planet-card[data-planet-index]');
         if (planetCard) {
             const idx = parseInt(planetCard.dataset.planetIndex);
-            doMine(idx);
+            // If they clicked the land button specifically, enter the planet
+            if (e.target.closest('.btn-land-planet')) {
+                const sectorData = store.getState().currentSector;
+                if (sectorData && sectorData.star_system && sectorData.star_system.planets[idx]) {
+                    const planet = sectorData.star_system.planets[idx];
+                    const { x, y, z } = store.getState().currentCoords;
+                    enterPlanet({
+                        biome: planet.biome,
+                        name: planet.name || `Planeta ${idx + 1}`,
+                        seed: Math.abs((x * 73856093) ^ (y * 19349663) ^ (z * 83492791) ^ (idx * 12345)),
+                        radius: planet.radius || 5,
+                        index: idx,
+                    });
+                }
+            } else {
+                doMine(idx);
+            }
+        }
+    });
+
+    // Listen for planet mode changes to toggle HUD
+    window.addEventListener('planet-mode', (e) => {
+        const { type } = e.detail;
+        const spaceHud = document.getElementById('hud-bar');
+        const planetHud = document.getElementById('planet-hud');
+        const crosshair = document.getElementById('crosshair');
+        
+        if (type === 'enter') {
+            if (spaceHud) spaceHud.style.opacity = '0.3';
+            if (planetHud) planetHud.style.display = 'flex';
+            if (crosshair) crosshair.style.display = 'block';
+            const biomeLabel = document.getElementById('planet-biome-label');
+            if (biomeLabel && e.detail.data) biomeLabel.textContent = e.detail.data.biome;
+            showNotification('🌍 Entrada Atmosférica', `Descendiendo a la superficie de ${e.detail.data?.name || 'planeta desconocido'}...`, 'legendary');
+        } else if (type === 'leave') {
+            if (spaceHud) spaceHud.style.opacity = '1';
+            if (planetHud) planetHud.style.display = 'none';
+            if (crosshair) crosshair.style.display = 'none';
+            showNotification('🚀 Órbita Alcanzada', `Regresando al sistema estelar`, '');
         }
     });
 
@@ -1141,9 +1287,14 @@ function showGachaReveal(items) {
     if (!overlay || !content) return;
 
     const bestRarity = items.reduce((best, item) => {
-        const order = ['common','uncommon','rare','epic','legendary'];
+        const order = ['common','uncommon','rare','epic','legendary','mythic'];
         return order.indexOf(item.rarity) > order.indexOf(best) ? item.rarity : best;
     }, 'common');
+
+    // --- GAME FEEL: Sensory Juice ---
+    triggerConfetti(bestRarity);
+    playDiscoverySound(bestRarity);
+    // --------------------------------
 
     content.innerHTML = `
         <div style="text-align:center;animation:fadeInUp 0.6s ease;">
@@ -1309,7 +1460,7 @@ function showOfflineModal(offline) {
         <div style="text-align:center;animation:fadeInUp 0.6s ease;">
             <div style="font-size:2.5rem;margin-bottom:10px;">🌙</div>
             <div style="font-family:var(--font-display);font-size:0.8rem;color:var(--text-primary);margin-bottom:4px;">¡BIENVENIDO DE VUELTA!</div>
-            <div style="font-size:0.6rem;color:var(--text-secondary);margin-bottom:16px;">Estuviste ausente ${offline.elapsed} minutos</div>
+            <div style="font-size:0.6rem;color:var(--text-secondary);margin-bottom:16px;">Estuviste ausente ${offline.elapsed} minutes</div>
 
             <div style="display:flex;justify-content:center;gap:16px;margin-bottom:20px;">
                 ${offline.quarks > 0 ? `<div style="text-align:center;">
@@ -1341,21 +1492,188 @@ function showOfflineModal(offline) {
 }
 
 // ─── Event Banner ───
+// (Replaced by updateEventHUD in ui.js)
 
-function updateEventBanner() {
-    const banner = document.getElementById('event-banner');
-    const textEl = document.getElementById('event-text');
-    const timerEl = document.getElementById('event-timer');
-    if (!banner) return;
+// ─── Market Modal Renderer ───
 
-    const eventInfo = getEventTimeRemaining();
-    if (!eventInfo) {
-        banner.style.display = 'none';
-        return;
+function renderMarketModal() {
+    const el = document.getElementById('market-content');
+    if (!el) return;
+
+    const data = getMarketData();
+    const materials = getMaterials();
+
+    let html = `<div style="margin-bottom:12px;font-size:0.7rem;color:var(--text-secondary);font-family:var(--font-mono);">
+        Los precios fluctúan según la actividad de minería global. ¡Compra barato, vende caro!
+    </div>`;
+
+    html += `<div style="display:grid;gap:8px;">`;
+
+    for (const [id, mat] of Object.entries(data)) {
+        const trend = getTrendIndicator(id);
+        const owned = materials.find(m => m.id === id)?.count || 0;
+        const sparkline = mat.history.length > 3 ? createSparkline(mat.history) : '';
+
+        html += `
+            <div class="glass-panel" style="padding:10px;display:flex;align-items:center;gap:10px;flex-wrap:wrap;">
+                <div style="flex:0 0 30px;font-size:1.2rem;">${mat.icon}</div>
+                <div style="flex:1;min-width:100px;">
+                    <div style="font-weight:600;font-size:0.75rem;">${mat.name}</div>
+                    <div style="font-size:0.65rem;color:var(--text-secondary);">
+                        Tienes: <span style="color:var(--color-primary);">${owned}</span>
+                    </div>
+                </div>
+                <div style="text-align:center;flex:0 0 70px;">
+                    <div style="font-size:0.65rem;color:var(--text-secondary);">Venta</div>
+                    <div style="font-weight:700;font-size:0.85rem;">${mat.sellPrice.toFixed(1)}⚡</div>
+                </div>
+                <div style="text-align:center;flex:0 0 40px;">
+                    <span class="${trend.class}" style="font-size:0.7rem;">${trend.emoji} ${trend.text}</span>
+                </div>
+                <div style="display:flex;gap:4px;">
+                    <button class="btn-sell-market" data-mat="${id}" style="
+                        padding:4px 8px;background:rgba(255,80,80,0.2);border:1px solid rgba(255,80,80,0.4);
+                        border-radius:4px;color:#ff8888;font-size:0.6rem;cursor:pointer;font-family:var(--font-mono);
+                    ">VENDER</button>
+                    <button class="btn-buy-market" data-mat="${id}" style="
+                        padding:4px 8px;background:rgba(80,200,80,0.2);border:1px solid rgba(80,200,80,0.4);
+                        border-radius:4px;color:#88ff88;font-size:0.6rem;cursor:pointer;font-family:var(--font-mono);
+                    ">COMPRAR</button>
+                </div>
+            </div>
+        `;
+    }
+    html += `</div>`;
+
+    el.innerHTML = html;
+
+    // Bind sell/buy buttons
+    el.querySelectorAll('.btn-sell-market').forEach(btn => {
+        btn.addEventListener('click', () => {
+            const matId = btn.dataset.mat;
+            const shipMats = {};
+            getMaterials().forEach(m => { shipMats[m.id] = m.count; });
+            const result = sellMaterial(matId, 1, shipMats);
+            if (result.success) {
+                store.dispatch({ type: 'ADD_QUARKS', payload: result.quarksGained });
+                updateResources(store.getState().quarks, store.getState().fuel);
+                renderMarketModal(); // Refresh
+            }
+        });
+    });
+
+    el.querySelectorAll('.btn-buy-market').forEach(btn => {
+        btn.addEventListener('click', () => {
+            const matId = btn.dataset.mat;
+            const shipMats = {};
+            getMaterials().forEach(m => { shipMats[m.id] = m.count; });
+            const result = buyMaterial(matId, 1, store.getState().quarks, shipMats);
+            if (result.success) {
+                store.dispatch({ type: 'ADD_QUARKS', payload: -result.quarksSpent });
+                updateResources(store.getState().quarks, store.getState().fuel);
+                renderMarketModal(); // Refresh
+            }
+        });
+    });
+}
+
+function createSparkline(data) {
+    // Simple text sparkline
+    const min = Math.min(...data);
+    const max = Math.max(...data);
+    const range = max - min || 1;
+    const chars = '▁▂▃▄▅▆▇█';
+    return data.slice(-8).map(v => {
+        const idx = Math.floor(((v - min) / range) * (chars.length - 1));
+        return chars[idx];
+    }).join('');
+}
+
+// ─── Beacon Modal Renderer ───
+
+function renderBeaconModal() {
+    const el = document.getElementById('beacon-content');
+    if (!el) return;
+
+    const { x, y, z } = store.getState().currentCoords;
+    const existing = getBeacon(x, y, z);
+    const presets = getPresetMessages();
+
+    let html = '';
+
+    if (existing) {
+        html += `
+            <div class="glass-panel" style="padding:12px;margin-bottom:12px;">
+                <div style="font-size:0.7rem;color:var(--color-primary);margin-bottom:4px;">📡 Baliza existente en este sector:</div>
+                <div style="font-size:0.85rem;font-style:italic;margin-bottom:6px;">"${existing.message}"</div>
+                <div style="font-size:0.6rem;color:var(--text-secondary);">— ${existing.author} | 👍 ${existing.rating}</div>
+                <button id="rate-beacon-btn" style="
+                    margin-top:8px;padding:4px 12px;background:rgba(102,126,234,0.2);
+                    border:1px solid var(--color-primary);border-radius:4px;color:var(--color-primary);
+                    font-size:0.65rem;cursor:pointer;font-family:var(--font-mono);
+                ">👍 ÚTIL</button>
+            </div>
+        `;
     }
 
-    banner.style.display = '';
-    banner.style.borderColor = eventInfo.event.color;
-    textEl.textContent = eventInfo.event.name;
-    timerEl.textContent = `⏱ ${eventInfo.hours}h ${eventInfo.mins}m`;
+    html += `
+        <div style="margin-bottom:10px;font-size:0.7rem;color:var(--text-secondary);">
+            Deja un mensaje holográfico para futuros exploradores en <strong>[${x}, ${y}, ${z}]</strong>:
+        </div>
+        <div style="margin-bottom:10px;">
+            <textarea id="beacon-message" maxlength="80" placeholder="Escribe tu mensaje..." style="
+                width:100%;height:60px;background:rgba(255,255,255,0.05);border:1px solid rgba(255,255,255,0.1);
+                border-radius:8px;color:var(--text-primary);font-family:var(--font-mono);font-size:0.7rem;
+                padding:8px;resize:none;
+            "></textarea>
+        </div>
+        <div style="font-size:0.65rem;color:var(--text-secondary);margin-bottom:6px;">Mensajes rápidos:</div>
+        <div style="display:flex;flex-wrap:wrap;gap:4px;margin-bottom:12px;">
+            ${presets.map(p => `
+                <button class="preset-msg" style="
+                    padding:3px 8px;background:rgba(255,255,255,0.05);border:1px solid rgba(255,255,255,0.1);
+                    border-radius:12px;color:var(--text-secondary);font-size:0.55rem;cursor:pointer;
+                    font-family:var(--font-mono);
+                ">${p}</button>
+            `).join('')}
+        </div>
+        <button id="leave-beacon-btn" style="
+            width:100%;padding:10px;background:linear-gradient(135deg,rgba(0,170,255,0.3),rgba(0,255,204,0.3));
+            border:1px solid rgba(0,255,204,0.4);border-radius:8px;color:#00ffcc;
+            font-family:var(--font-mono);font-size:0.75rem;cursor:pointer;font-weight:700;
+        ">📡 DEJAR BALIZA</button>
+    `;
+
+    el.innerHTML = html;
+
+    // Preset click → fill textarea
+    el.querySelectorAll('.preset-msg').forEach(btn => {
+        btn.addEventListener('click', () => {
+            document.getElementById('beacon-message').value = btn.textContent.trim();
+        });
+    });
+
+    // Leave beacon
+    document.getElementById('leave-beacon-btn')?.addEventListener('click', () => {
+        const msg = document.getElementById('beacon-message')?.value?.trim();
+        if (!msg) {
+            showNotification('❌ Vacío', 'Escribe un mensaje primero.', '');
+            return;
+        }
+        const success = leaveBeacon(x, y, z, msg, getExplorerTitle());
+        if (success) {
+            showNotification('📡 Baliza Instalada', `Tu mensaje resuena en [${x},${y},${z}].`, 'rare');
+            // Add 3D beacon to scene
+            const beaconMesh = createBeaconMesh({ message: msg, author: getExplorerTitle() });
+            getScene().add(beaconMesh);
+            document.getElementById('modal-beacon').classList.remove('active');
+        }
+    });
+
+    // Rate beacon
+    document.getElementById('rate-beacon-btn')?.addEventListener('click', () => {
+        rateBeacon(x, y, z);
+        showNotification('👍 Valorada', 'Has valorado esta baliza.', '');
+        renderBeaconModal();
+    });
 }
